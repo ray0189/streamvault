@@ -199,11 +199,11 @@ setup_cloudflare() {
 
   ask "Enable Cloudflare Access (require login before addon is reachable)? [y/N]"
   read -rp "  › " CF_ACC_IN
-  [[ "${CF_ACC_IN,,}" == "y" ]] && CF_ACCESS=true
+  [[ "$(echo "$CF_ACC_IN" | tr '[:upper:]' '[:lower:]')" == "y" ]] && CF_ACCESS=true
 
   ask "Block all countries except yours? [y/N]"
   read -rp "  › " CF_CB_IN
-  [[ "${CF_CB_IN,,}" == "y" ]] && CF_COUNTRY_BLOCK=true
+  [[ "$(echo "$CF_CB_IN" | tr '[:upper:]' '[:lower:]')" == "y" ]] && CF_COUNTRY_BLOCK=true
 
   ask "Rate limit — requests per minute per IP [60]"
   read -rp "  › " CF_RL_IN
@@ -248,19 +248,19 @@ MIN_RES="${RES_IN:-1080p}"
 
 ask "Cached streams only (instant play)? [Y/n]"
 read -rp "  › " CACHED_IN
-[[ "${CACHED_IN,,}" == "n" ]] && CACHED_ONLY=false || CACHED_ONLY=true
+[[ "$(echo "$CACHED_IN" | tr '[:upper:]' '[:lower:]')" == "n" ]] && CACHED_ONLY=false || CACHED_ONLY=true
 
 ask "Prefer HEVC/x265? [Y/n]"
 read -rp "  › " HEVC_IN
-[[ "${HEVC_IN,,}" == "n" ]] && PREFER_HEVC=false || PREFER_HEVC=true
+[[ "$(echo "$HEVC_IN" | tr '[:upper:]' '[:lower:]')" == "n" ]] && PREFER_HEVC=false || PREFER_HEVC=true
 
 ask "Prefer HDR / Dolby Vision? [Y/n]"
 read -rp "  › " HDR_IN
-[[ "${HDR_IN,,}" == "n" ]] && PREFER_HDR=false || PREFER_HDR=true
+[[ "$(echo "$HDR_IN" | tr '[:upper:]' '[:lower:]')" == "n" ]] && PREFER_HDR=false || PREFER_HDR=true
 
 ask "Prefer Atmos / TrueHD audio? [Y/n]"
 read -rp "  › " ATMOS_IN
-[[ "${ATMOS_IN,,}" == "n" ]] && PREFER_ATMOS=false || PREFER_ATMOS=true
+[[ "$(echo "$ATMOS_IN" | tr '[:upper:]' '[:lower:]')" == "n" ]] && PREFER_ATMOS=false || PREFER_ATMOS=true
 
 ask "Preferred audio language [en]  (en / ar / fr / es / de / any)"
 read -rp "  › " LANG_IN
@@ -774,7 +774,7 @@ PYEOF
     ID=$(_find_profile "$1")
     [[ -z "$ID" ]] && err "Profile '$1' not found"
     read -rp "  Delete '$1'? Its manifest URL will stop working. [y/N] " CONF
-    [[ "${CONF,,}" != "y" ]] && echo "Cancelled" && exit 0
+    [[ "$(echo "$CONF" | tr '[:upper:]' '[:lower:]')" != "y" ]] && echo "Cancelled" && exit 0
     _del "profiles/$ID" >/dev/null
     ok "Deleted '$1'"
     ;;
