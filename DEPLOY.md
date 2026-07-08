@@ -1,81 +1,187 @@
-# StreamVault — Deploy Guide
+# StreamVault VPS Installation & HTTPS Setup Report
 
-The recommended path is the Linux installer, which ends in a terminal setup
-wizard. There is no web-based setup: until the wizard has been run on the
-server, the web UI only shows a "run setup on the server" notice.
+## Overview
 
-## Quick install (Debian/Ubuntu, generic Linux fallback)
+During deployment of StreamVault on a fresh Ubuntu VPS, three install/runtime issues were identified and fixed on this branch:
+
+1. `npm install` can fail with `ENETUNREACH` when the VPS has broken IPv6 routing and Node/npm prefers IPv6 DNS results.
+2. The installer expected `.env.example`; if that template was missing, install failed with `cp: cannot stat '.env.example'`.
+3. Stremio iOS may fail to fetch addon manifests over plain HTTP, so production use should expose StreamVault through a trusted HTTPS reverse proxy.
+
+## 1. npm installation failure caused by broken IPv6
+
+### Problem
+
+`apt update`, Git clone, and IPv4 connectivity worked, but `npm install` failed with a network unreachable error.
+
+Testing showed:
 
 ```bash
-git clone <your-repo-url> streamvault
-cd streamvault
-sudo bash install.sh            # options: --dir /opt/streamvault --port 7005
+curl -4 https://registry.npmjs.org
 ```
 
-The installer:
+worked, while:
 
-- installs Node.js LTS (NodeSource on Debian/Ubuntu, nvm elsewhere), Redis and git if missing
-- copies the app to `/opt/streamvault` and runs `npm install`
-- generates a fresh `SECRET_KEY` (never reuses one, never sets a default admin password)
-- **runs the interactive setup wizard in your terminal** (see below)
-- creates and enables `streamvault.service` (systemd) so it survives reboots
-- starts the server and prints the dashboard login URL
+```bash
+curl -6 https://registry.npmjs.org
+```
 
-## The terminal setup wizard
+failed immediately. The VPS advertised/attempted IPv6, but did not have working IPv6 routing.
 
-Runs automatically at the end of `install.sh`. Re-run it any time with
-`sudo bash install.sh --reconfigure` (or `streamvault setup`) — it lets you
-keep the existing admin account and just change the access mode.
+### Fix
 
-**Step 1 — Admin account.** Username + password (min 8 chars, typed hidden,
-confirmed). This is the only dashboard login; it's stored bcrypt-hashed
-inside an encrypted store (`data/auth.db`), never in `.env`.
+The installer now detects this condition and automatically applies:
 
-**Step 2 — Access mode.** Three genuinely different paths:
+```bash
+NODE_OPTIONS=--dns-result-order=ipv4first
+```
 
-| Mode | Who it's for | What happens |
-|---|---|---|
-| **1. Own public IP / domain** | You have a public/static IP or a domain pointing at it, and can port-forward | You enter the IP/domain + port (+ http/https); `PUBLIC_BASE_URL` is set to expose the server directly. No Cloudflare, no tunnel. The wizard reminds you to forward the port (TCP) on your router. |
-| **2. Cloudflare Tunnel** | No public IP (CGNAT) or no desire to port-forward | Paste the tunnel token + hostname from Cloudflare Zero Trust. cloudflared is downloaded automatically if missing and the token is validated on the spot, then stored encrypted. The tunnel runs supervised by the service and restarts with it. |
-| **3. Local only (LAN/Tailscale)** | No public exposure at all | Confirms your LAN IP (auto-detected); manifest URLs are LAN-only. Use Tailscale for remote access without exposure. |
+for the npm install step. If npm still fails with `ENETUNREACH`, `EHOSTUNREACH`, `network is unreachable`, or an IPv6-looking error, the installer retries npm with IPv4-first DNS.
 
-**Step 3 —** the wizard prints the dashboard URL. Log in with the account
-from step 1.
+Manual fallback:
 
-## After login (web dashboard)
+```bash
+export NODE_OPTIONS=--dns-result-order=ipv4first
+sudo env NODE_OPTIONS=--dns-result-order=ipv4first bash install.sh
+```
 
-Enter your **TorBox API key** in **Settings** —
-not in `.env`. Secrets are stored encrypted at rest in `data/secrets.db`,
-keyed off `SECRET_KEY`. Password changes are in Settings → Account.
+## 2. Missing `.env.example`
 
-`.env` only holds non-sensitive runtime config (port, cache TTLs, provider
-toggles).
+### Problem
 
-## Day-to-day
+The installer previously failed when `.env.example` was missing:
 
-| Task | Command |
-|---|---|
-| Status | `systemctl status streamvault` |
-| Logs | `journalctl -u streamvault -f` |
-| Restart | `systemctl restart streamvault` (or the Restart button in Settings) |
-| Change access mode / reset admin | `sudo bash install.sh --reconfigure` |
-| Update code | pull/copy new code into the install dir, `npm install`, restart |
+```text
+cp: cannot stat '.env.example'
+```
 
-## What persists where
+### Fix
 
-- `.env` — non-secret runtime config
-- `data/auth.db` — admin credentials (encrypted, bcrypt-hashed password)
-- `data/secrets.db` — TorBox key, CF tunnel token (encrypted)
-- `data/profiles.json` — Stremio profiles
-- Redis — stream cache (safe to flush)
+This branch includes `.env.example` and the installer also has a built-in fallback template. If the file is missing, it writes a safe default template and continues instead of terminating.
 
-**Back up `data/` together with the `SECRET_KEY` line of `.env`** — the
-encrypted stores are unreadable without it. Never change `SECRET_KEY` after
-setup; if you lose it, delete `data/auth.db`/`data/secrets.db` and re-run the
-wizard.
+The template uses the working NAS model:
 
-## Docker (alternative)
+```env
+TORBOX_API_KEY=
+TORBOX_API_URL=https://api.torbox.app/v1/api
+DEFAULT_CACHED_ONLY=true
+DEFAULT_MIN_QUALITY=1080p
+PUBLIC_BASE_URL=
+REDIS_URL=redis://127.0.0.1:6379
+```
 
-`docker compose up -d --build` still works, but you must run the wizard
-inside the container once: `docker compose exec -it streamvault npm run setup`.
-`REDIS_URL` is forced to `redis://redis:6379` by docker-compose.
+Do not commit the real `.env` file because it contains secrets.
+
+## 3. HTTPS for Stremio iOS
+
+StreamVault itself serves plain HTTP. If Stremio iOS fails with `Failed to fetch` and the StreamVault logs show no incoming request, the failure is likely happening before the app receives the request. Use a trusted HTTPS endpoint.
+
+### DuckDNS
+
+Example hostname:
+
+```text
+rvault.duckdns.org
+```
+
+pointing to the VPS IP:
+
+```text
+57.129.128.16
+```
+
+Verify DNS:
+
+```bash
+dig +short rvault.duckdns.org
+```
+
+### Caddy reverse proxy
+
+When port 443 is free:
+
+```caddy
+rvault.duckdns.org {
+    reverse_proxy 127.0.0.1:7005
+}
+```
+
+Set:
+
+```env
+PUBLIC_BASE_URL=https://rvault.duckdns.org
+```
+
+### S-UI / port 443 conflict
+
+If S-UI or another service is already listening on port 443, Caddy cannot bind to 443:
+
+```text
+listen tcp :443: bind: address already in use
+```
+
+Check:
+
+```bash
+sudo ss -lntp | grep ':443'
+```
+
+Temporary alternate-port Caddy config:
+
+```caddy
+https://rvault.duckdns.org:8444 {
+    reverse_proxy 127.0.0.1:7005
+}
+```
+
+Open the firewall:
+
+```bash
+sudo ufw allow 8444/tcp
+```
+
+Set:
+
+```env
+PUBLIC_BASE_URL=https://rvault.duckdns.org:8444
+```
+
+Verify:
+
+```bash
+curl -kI https://rvault.duckdns.org:8444/health
+curl -k https://rvault.duckdns.org:8444/health
+```
+
+## Current known-good VPS shape
+
+```text
+StreamVault app:  http://127.0.0.1:7005
+Caddy HTTPS:      https://rvault.duckdns.org:8444
+Systemd service:  streamvault.service
+Config file:      /opt/streamvault/.env
+```
+
+Health check:
+
+```bash
+curl http://127.0.0.1:7005/health
+curl -k https://rvault.duckdns.org:8444/health
+```
+
+## Reinstall on VPS
+
+```bash
+sudo systemctl disable --now streamvault 2>/dev/null || true
+sudo rm -rf /opt/streamvault ~/streamvault
+
+git clone https://github.com/ray0189/streamvault.git ~/streamvault
+cd ~/streamvault
+sudo bash install.sh --dir /opt/streamvault --port 7005
+```
+
+For the current Caddy alternate HTTPS port setup, use this public URL in the setup wizard:
+
+```text
+https://rvault.duckdns.org:8444
+```
