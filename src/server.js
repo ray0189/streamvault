@@ -16,6 +16,10 @@ const { PORT, HOST, NODE_ENV } = require('./config/env');
 
 const app = express();
 
+// Needed behind Caddy/Nginx/Cloudflare so express-rate-limit accepts
+// X-Forwarded-For and the login limiter does not throw validation warnings.
+app.set('trust proxy', 1);
+
 app.use(cors());
 app.use(express.json());
 app.use(morgan(NODE_ENV === 'production' ? 'combined' : 'dev'));
