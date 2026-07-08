@@ -1,9 +1,4 @@
 require('dotenv').config();
-// Order matters: SECRET_KEY must exist and vault secrets must be mirrored onto
-// process.env before config/env.js (required transitively below) snapshots it.
-require('./config/bootstrap').ensureSecretKey();
-require('./config/secrets').loadIntoEnv();
-
 const express = require('express');
 const cors    = require('cors');
 const morgan  = require('morgan');
@@ -14,9 +9,6 @@ const addonRouter = require('./addon/router');
 const apiRouter   = require('./api/router');
 const playerRouter = require('./api/player');
 const settingsRouter = require('./api/settings');
-const authRouter  = require('./auth/routes');
-const setup       = require('./setup/routes');
-const cloudflared = require('./setup/cloudflared');
 const torbox      = require('./api/torbox');
 const cache       = require('./cache/store');
 const { PORT, HOST, NODE_ENV } = require('./config/env');
@@ -26,11 +18,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(morgan(NODE_ENV === 'production' ? 'combined' : 'dev'));
-app.use(setup.firstRunGate);
-app.use(setup.router);
 app.use(express.static(path.join(__dirname, '../dashboard')));
 
-app.use('/api/auth', authRouter);
 app.use('/config', addonRouter);
 app.use('/api/player', playerRouter);
 app.use('/api', apiRouter);
@@ -89,15 +78,8 @@ app.get('/health', (req, res) => {
 });
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
-cloudflared.resumeIfConfigured();
-
 app.listen(PORT, HOST, () => {
   console.log('');
-  if (setup.isFirstRun()) {
-    console.log(chalk.bold.yellow('  ► First run — no admin account yet. Run the terminal setup:'));
-    console.log(chalk.bold.white('  ►   sudo bash install.sh --reconfigure   (or: streamvault setup)'));
-    console.log('');
-  }
   console.log(chalk.bold.cyan('  ╔══════════════════════════════════════╗'));
   console.log(chalk.bold.cyan('  ║   Stremio Private Addon — Running    ║'));
   console.log(chalk.bold.cyan('  ╚══════════════════════════════════════╝'));
