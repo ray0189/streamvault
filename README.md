@@ -1,42 +1,95 @@
 # StreamVault
 
-Private self-hosted Stremio addon backed by your own TorBox account.
+StreamVault is a private self-hosted Stremio addon that uses your own TorBox account.
+This branch uses the simple working NAS model: all runtime configuration lives in `.env`, including the TorBox API key and dashboard password.
 
-This branch restores the working NAS install model: runtime configuration lives in `.env`, including `TORBOX_API_KEY`, `ADMIN_PASSWORD`, public URL, Redis URL and provider toggles. Do **not** commit your real `.env`.
-
-## Install
+## Install on Ubuntu/Debian VPS or NAS
 
 ```bash
 git clone https://github.com/ray0189/streamvault.git
 cd streamvault
-sudo bash install.sh --dir /opt/streamvault --port 7005
+sudo bash install.sh
 ```
 
-For your VPS + Caddy setup, use the local app port behind Caddy. If Caddy proxies to `127.0.0.1:7005`, keep `--port 7005`. If it proxies to `127.0.0.1:7000`, use `--port 7000`.
+The installer sets up Node.js, Redis, npm dependencies, `.env`, and `streamvault.service`, then runs the terminal setup wizard.
 
-## VPS fixes in this installer
+## Important files
 
-The installer now handles two issues found during the VPS deployment:
+- `.env.example` — template copied to `.env`
+- `.env` — local runtime config; never commit this
+- `data/profiles.json` — Stremio profiles
+- Redis — stream cache
 
-- If IPv4 access to `registry.npmjs.org` works but IPv6 fails, it automatically uses `NODE_OPTIONS=--dns-result-order=ipv4first` for npm.
-- If `.env.example` is missing, it writes a safe default template instead of failing with `cp: cannot stat '.env.example'`.
+## Required `.env` values
 
-## HTTPS for Stremio iOS
-
-StreamVault itself serves plain HTTP. For Stremio iOS, use a trusted HTTPS reverse proxy such as Caddy.
-
-Example DuckDNS + Caddy config when port 443 is free:
-
-```caddy
-rvault.duckdns.org {
-    reverse_proxy 127.0.0.1:7005
-}
+```env
+TORBOX_API_KEY=your_torbox_key
+TORBOX_API_URL=https://api.torbox.app/v1/api
+TORBOX_SEARCH_API_URL=https://search-api.torbox.app
+TORBOX_ENABLE_NATIVE_SEARCH=true
+TORBOX_ENABLE_USENET=true
+TORBOX_PROVIDER_PRIORITY=torbox-torrent,torbox-usenet,library,torrentio,knightcrawler
+DEFAULT_CACHED_ONLY=true
+DEFAULT_MIN_QUALITY=1080p
 ```
 
-If S-UI or another panel already owns port 443, run Caddy on an alternate HTTPS port temporarily:
+## HTTPS / reverse proxy
+
+For Caddy or any reverse proxy, point it to the local StreamVault port and set:
+
+```env
+PUBLIC_BASE_URL=https://your-domain.example
+```
+
+Your VPS setup used Caddy + DuckDNS successfully, so the app only needs the correct `PUBLIC_BASE_URL` and the proxy to forward to the StreamVault port.
+
+## Commands
+
+```bash
+sudo systemctl status streamvault --no-pager
+sudo journalctl -u streamvault -f
+sudo systemctl restart streamvault
+sudo bash install.sh --reconfigure
+npm test
+```
+
+## Docker alternative
+
+```bash
+cp .env.example .env
+nano .env
+docker compose up -d --build
+```
+
+
+## VPS fixes included
+
+### Broken IPv6 during npm install
+
+Some VPS images have working IPv4 but broken IPv6 routing. In that state `apt update` and `git clone` can work, while `npm install` fails with `ENETUNREACH` because Node tries IPv6 first for `registry.npmjs.org`.
+
+The installer now checks the npm registry over IPv4 and IPv6. If IPv4 works and IPv6 fails, it automatically runs npm with:
+
+```bash
+NODE_OPTIONS=--dns-result-order=ipv4first
+```
+
+It also retries `npm install` with IPv4-first DNS if npm fails with a network-unreachable style error.
+
+### Missing `.env.example`
+
+The repo includes `.env.example`. The installer also has a built-in fallback template, so a damaged or incomplete checkout will not die at:
+
+```text
+cp: cannot stat '.env.example'
+```
+
+### HTTPS for Stremio iOS
+
+StreamVault serves HTTP locally. For Stremio iOS, use a trusted HTTPS hostname through a reverse proxy. Example Caddyfile for your VPS:
 
 ```caddy
-https://rvault.duckdns.org:8444 {
+https://vault.example.com:8444 {
     reverse_proxy 127.0.0.1:7005
 }
 ```
@@ -44,22 +97,7 @@ https://rvault.duckdns.org:8444 {
 Then set:
 
 ```env
-PUBLIC_BASE_URL=https://rvault.duckdns.org:8444
+PUBLIC_BASE_URL=https://vault.example.com:8444
 ```
 
-Open the firewall port too:
-
-```bash
-sudo ufw allow 8444/tcp
-```
-
-## Useful commands
-
-```bash
-systemctl status streamvault --no-pager
-journalctl -u streamvault -f
-curl http://127.0.0.1:7005/health
-curl -k https://rvault.duckdns.org:8444/health
-```
-
-See `DEPLOY.md` for the full VPS/HTTPS report.
+If port `443` is already occupied by S-UI or another panel, either move that service off `443` or run Caddy on an alternate HTTPS port such as `8444` and open that TCP port in the firewall.
