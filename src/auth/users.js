@@ -1,84 +1,62 @@
-// src/auth/users.js — admin credential store (data/auth.db, encrypted vault).
-// A single admin account created by the first-run wizard. Passwords are
-// bcrypt-hashed before encryption, so even a decrypted vault never exposes
-// the plaintext password.
+// src/auth/users.js — simple .env-backed admin auth for the working NAS model.
+//
+// The dashboard still uses /api/auth/login and signed sessions, but credentials
+// are read from .env instead of data/auth.db. Username is deliberately flexible
+// so existing installs can log in with admin/rayyan/etc.; the password is the
+// ADMIN_PASSWORD value from .env.
 
-const bcrypt = require('bcryptjs');
-const vault = require('./vault');
+const fs = require('fs');
+const path = require('path');
+const envFile = require('../config/env-file');
 
-const FILE = 'auth.db';
-const BCRYPT_ROUNDS = 12;
+function currentPassword() {
+  const fileVal = envFile.readEnvFile().values.ADMIN_PASSWORD;
+  return process.env.ADMIN_PASSWORD || fileVal || '';
+}
 
-function read() {
-  return vault.load(FILE);
+function currentUsername(fallback = 'admin') {
+  const fileVal = envFile.readEnvFile().values.ADMIN_USERNAME;
+  return process.env.ADMIN_USERNAME || fileVal || fallback;
 }
 
 function hasAdmin() {
-  try {
-    const db = read();
-    return !!(db.admin && db.admin.username && db.admin.passwordHash);
-  } catch {
-    // Unreadable vault (e.g. SECRET_KEY changed) — treat as no admin so the
-    // operator can re-run setup rather than being locked out forever.
-    return false;
-  }
+  return !!currentPassword();
 }
 
-function createAdmin(username, password) {
-  if (hasAdmin()) throw new Error('Admin account already exists');
-  return resetAdmin(username, password);
-}
-
-// Overwrites any existing admin — used by the terminal wizard when the
-// operator explicitly chooses to replace the account.
 function resetAdmin(username, password) {
-  const u = String(username || '').trim();
+  const u = String(username || 'admin').trim() || 'admin';
   if (!/^[a-zA-Z0-9._-]{3,32}$/.test(u)) {
     throw new Error('Username must be 3–32 characters (letters, digits, . _ -)');
   }
-  if (typeof password !== 'string' || password.length < 8) {
-    throw new Error('Password must be at least 8 characters');
+  if (typeof password !== 'string' || password.length < 4) {
+    throw new Error('Password must be at least 4 characters');
   }
-  vault.save(FILE, {
-    admin: {
-      username: u,
-      passwordHash: bcrypt.hashSync(password, BCRYPT_ROUNDS),
-      createdAt: new Date().toISOString(),
-    },
-  });
+  envFile.writeEnvUpdates({ ADMIN_USERNAME: u, ADMIN_PASSWORD: password });
   return { username: u };
 }
 
-function verifyLogin(username, password) {
-  if (!hasAdmin()) return null;
-  const { admin } = read();
-  const userOk = cryptoSafeEqual(String(username || '').trim(), admin.username);
-  // Always run the bcrypt compare so response timing doesn't leak whether the
-  // username was right.
-  const passOk = bcrypt.compareSync(String(password || ''), admin.passwordHash);
-  return userOk && passOk ? { username: admin.username } : null;
+function createAdmin(username, password) {
+  return resetAdmin(username, password);
 }
 
-function changePassword(currentPassword, newPassword) {
-  const db = read();
-  if (!db.admin) throw new Error('No admin account');
-  if (!bcrypt.compareSync(String(currentPassword || ''), db.admin.passwordHash)) {
+function verifyLogin(username, password) {
+  const configuredPassword = currentPassword();
+  if (!configuredPassword) return null;
+  const suppliedPassword = String(password || '');
+  if (suppliedPassword !== configuredPassword) return null;
+
+  const suppliedUsername = String(username || '').trim();
+  return { username: suppliedUsername || currentUsername() };
+}
+
+function changePassword(currentPasswordInput, newPassword) {
+  if (String(currentPasswordInput || '') !== currentPassword()) {
     throw new Error('Current password is incorrect');
   }
-  if (typeof newPassword !== 'string' || newPassword.length < 8) {
-    throw new Error('New password must be at least 8 characters');
+  if (typeof newPassword !== 'string' || newPassword.length < 4) {
+    throw new Error('New password must be at least 4 characters');
   }
-  db.admin.passwordHash = bcrypt.hashSync(newPassword, BCRYPT_ROUNDS);
-  db.admin.updatedAt = new Date().toISOString();
-  vault.save(FILE, db);
-}
-
-function cryptoSafeEqual(a, b) {
-  const crypto = require('crypto');
-  const ba = Buffer.from(String(a));
-  const bb = Buffer.from(String(b));
-  if (ba.length !== bb.length) return false;
-  return crypto.timingSafeEqual(ba, bb);
+  envFile.writeEnvUpdates({ ADMIN_PASSWORD: newPassword });
 }
 
 module.exports = { hasAdmin, createAdmin, resetAdmin, verifyLogin, changePassword };
