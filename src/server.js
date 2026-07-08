@@ -9,6 +9,7 @@ const addonRouter = require('./addon/router');
 const apiRouter   = require('./api/router');
 const playerRouter = require('./api/player');
 const settingsRouter = require('./api/settings');
+const authRouter  = require('./auth/routes');
 const torbox      = require('./api/torbox');
 const cache       = require('./cache/store');
 const { PORT, HOST, NODE_ENV } = require('./config/env');
@@ -20,6 +21,7 @@ app.use(express.json());
 app.use(morgan(NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.static(path.join(__dirname, '../dashboard')));
 
+app.use('/api/auth', authRouter);
 app.use('/config', addonRouter);
 app.use('/api/player', playerRouter);
 app.use('/api', apiRouter);
