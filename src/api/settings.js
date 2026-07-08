@@ -9,10 +9,18 @@ const express = require('express');
 const axios = require('axios');
 const router = express.Router();
 const envFile = require('../config/env-file');
-const secrets = require('../config/secrets');
 const cache = require('../cache/store');
 const env = require('../config/env');
-const { requireAuth: adminAuth } = require('../auth/session');
+
+const { ADMIN_PASSWORD } = env;
+
+function adminAuth(req, res, next) {
+  const token = req.headers['x-admin-token'] || req.query.token;
+  // process.env first so a password change applies without a restart
+  const current = process.env.ADMIN_PASSWORD || ADMIN_PASSWORD;
+  if (token !== current) return res.status(401).json({ error: 'Unauthorised' });
+  next();
+}
 
 function maskKey(key) {
   if (!key) return '';
@@ -67,10 +75,10 @@ const FIELDS = {
   defaultMinQuality: { key: 'DEFAULT_MIN_QUALITY', type: 'enum', values: ['480p', '720p', '1080p', '1440p', '2160p'] },
   defaultCachedOnly: { key: 'DEFAULT_CACHED_ONLY', type: 'bool' },
   defaultLanguage: { key: 'DEFAULT_LANGUAGE', type: 'string' },
+  // Advanced
+  newAdminPassword: { key: 'ADMIN_PASSWORD', type: 'string', secret: true, minLen: 6 },
+  secretKey: { key: 'SECRET_KEY', type: 'string', secret: true, minLen: 16 },
 };
-// Admin password changes go through POST /api/auth/change-password, and
-// SECRET_KEY is no longer editable here — rotating it would invalidate the
-// encrypted credential stores that are keyed off it.
 
 // GET /api/settings — everything, secrets masked
 router.get('/settings', adminAuth, (req, res) => {
@@ -106,6 +114,8 @@ router.get('/settings', adminAuth, (req, res) => {
       language: cur('DEFAULT_LANGUAGE', env.DEFAULT_LANGUAGE),
     },
     advanced: {
+      secretKeySet: !!cur('SECRET_KEY') && cur('SECRET_KEY') !== 'change-me',
+      secretKeyMasked: maskKey(cur('SECRET_KEY') === 'change-me' ? '' : cur('SECRET_KEY')),
       port: curInt('PORT', env.PORT),
     },
   });
@@ -152,36 +162,32 @@ function validateField(name, value) {
   }
 }
 
-// PATCH /api/settings — non-secret fields persist to .env; secret fields
-// (TorBox key, tunnel token) go to the encrypted vault instead.
+// PATCH /api/settings — persist any subset of fields to .env
 router.patch('/settings', adminAuth, (req, res) => {
   const body = req.body || {};
-  const envUpdates = {};
-  const secretUpdates = {};
+  const updates = {};
   const fieldErrors = {};
 
   for (const [name, value] of Object.entries(body)) {
     if (!FIELDS[name]) continue;
     const r = validateField(name, value);
     if (r.error) fieldErrors[name] = r.error;
-    else if (secrets.isSecretEnvKey(FIELDS[name].key)) secretUpdates[FIELDS[name].key] = r.value;
-    else envUpdates[FIELDS[name].key] = r.value;
+    else updates[FIELDS[name].key] = r.value;
   }
 
   if (Object.keys(fieldErrors).length) {
     return res.status(400).json({ error: 'Validation failed', fieldErrors });
   }
-  const savedKeys = [...Object.keys(envUpdates), ...Object.keys(secretUpdates)];
-  if (!savedKeys.length) {
+  if (!Object.keys(updates).length) {
     return res.status(400).json({ error: 'No recognised fields in body' });
   }
 
-  if (Object.keys(envUpdates).length) envFile.writeEnvUpdates(envUpdates);
-  if (Object.keys(secretUpdates).length) secrets.set(secretUpdates);
+  envFile.writeEnvUpdates(updates);
 
-  const liveKeys = ['PUBLIC_BASE_URL'];
-  const restartRequired = savedKeys.some(k => !liveKeys.includes(k));
-  res.json({ saved: true, restartRequired, savedKeys });
+  // ADMIN_PASSWORD is checked against process.env live, so it applies now.
+  const liveKeys = ['ADMIN_PASSWORD', 'PUBLIC_BASE_URL'];
+  const restartRequired = Object.keys(updates).some(k => !liveKeys.includes(k));
+  res.json({ saved: true, restartRequired, savedKeys: Object.keys(updates) });
 });
 
 // POST /api/settings/test-torbox — live connectivity check against TorBox
