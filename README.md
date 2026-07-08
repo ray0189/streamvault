@@ -1,29 +1,9 @@
 # StreamVault
 
-StreamVault is a private, self-hosted [Stremio](https://www.stremio.com/) addon
-that streams movies and shows through your own [TorBox](https://torbox.app)
-account. You run it on a Linux box you control (home server, NAS, VPS); it
-searches TorBox's cached torrents/usenet (plus optional public indexers),
-ranks results by quality, and hands Stremio a personal manifest URL per
-device or person. Nothing is shared with anyone else: your TorBox key, your
-server, your streams.
+StreamVault is a private self-hosted Stremio addon that uses your own TorBox account.
+This branch uses the simple working NAS model: all runtime configuration lives in `.env`, including the TorBox API key and dashboard password.
 
-## Requirements
-
-- **Linux** with systemd (Debian/Ubuntu best supported; Fedora/Arch work via
-  a generic fallback). Root/`sudo` for installation.
-- A **TorBox account + API key** (added after install, in the dashboard).
-- **Network, depending on the access mode you pick in the wizard:**
-
-  | Access mode | Inbound ports needed | Notes |
-  |---|---|---|
-  | Own public IP / domain | The port you choose (default **7005/TCP**) must be forwarded on your router/firewall to this machine | You need a public or static IP, or a domain whose DNS points at it |
-  | Cloudflare Tunnel | **None** — only outbound HTTPS (443) | Works behind CGNAT; needs a free Cloudflare account with your domain on it |
-  | Local only (LAN/Tailscale) | The port (default 7005/TCP) reachable on your LAN only | Nothing exposed to the internet |
-
-Node.js (LTS), Redis and git are installed automatically if missing.
-
-## Install
+## Install on Ubuntu/Debian VPS or NAS
 
 ```bash
 git clone https://github.com/ray0189/streamvault.git
@@ -31,91 +11,93 @@ cd streamvault
 sudo bash install.sh
 ```
 
-Optional flags: `--dir /opt/streamvault` (install location), `--port 7005`.
+The installer sets up Node.js, Redis, npm dependencies, `.env`, and `streamvault.service`, then runs the terminal setup wizard.
 
-The installer sets up Node, Redis, the app, and a systemd service
-(`streamvault.service`, starts on boot), then drops you into a **terminal
-setup wizard**:
+## Important files
 
-**Step 1 — Admin account.** Pick a username and password (min 8 characters,
-typed hidden). This is the only login for the web dashboard. It's stored
-bcrypt-hashed in an encrypted local store — never in a plain config file.
+- `.env.example` — template copied to `.env`
+- `.env` — local runtime config; never commit this
+- `data/profiles.json` — Stremio profiles
+- Redis — stream cache
 
-**Step 2 — Access mode.** How will Stremio (on your TV, phone, laptop)
-reach this server?
+## Required `.env` values
 
-1. **Own public IP / domain** — choose this if your internet connection has
-   a public or static IP and you can forward a port on your router. You
-   enter the IP (or a domain already pointing at it) and the port; devices
-   connect to it directly, with no third-party service involved. Remember to
-   actually forward the port, or nothing outside your network can connect.
-2. **Cloudflare Tunnel** — choose this if you don't have a public IP (mobile
-   or CGNAT internet), can't port-forward, or just don't want an open port.
-   In the Cloudflare Zero Trust dashboard you create a free tunnel, point a
-   hostname at `http://localhost:7005`, and paste the tunnel token into the
-   wizard. The connector (`cloudflared`) is downloaded automatically, the
-   token is validated on the spot and stored encrypted, and the tunnel runs
-   with the service. Your server only makes outbound connections.
-3. **Local only (LAN / Tailscale)** — choose this if the addon should never
-   be reachable from the internet. The wizard confirms your LAN IP and
-   manifest URLs are LAN-only. For remote access without exposure, put the
-   server and your devices on [Tailscale](https://tailscale.com) and use the
-   Tailscale IP.
+```env
+TORBOX_API_KEY=your_torbox_key
+TORBOX_API_URL=https://api.torbox.app/v1/api
+TORBOX_SEARCH_API_URL=https://search-api.torbox.app
+TORBOX_ENABLE_NATIVE_SEARCH=true
+TORBOX_ENABLE_USENET=true
+TORBOX_PROVIDER_PRIORITY=torbox-torrent,torbox-usenet,library,torrentio,knightcrawler
+DEFAULT_CACHED_ONLY=true
+DEFAULT_MIN_QUALITY=1080p
+```
 
-**Step 3 —** the wizard prints the dashboard URL. Open it and log in.
+## HTTPS / reverse proxy
 
-## After install: add your API keys
+For Caddy or any reverse proxy, point it to the local StreamVault port and set:
 
-In the dashboard, go to **Settings**:
+```env
+PUBLIC_BASE_URL=https://your-domain.example
+```
 
-- **TorBox → API key** — from torbox.app → Settings → API. Use *Test TorBox
-  connection* to verify.
+Each user should create/use their own hostname (for example via DuckDNS or their own domain), point it at the server, and set `PUBLIC_BASE_URL` to that hostname. Do not copy someone else's hostname.
 
-Keys are stored encrypted at rest on the server (`data/secrets.db`), not in
-`.env` and never shown in full again after saving. Then create a **Profile**
-per device/person — each gets a private manifest URL to paste into Stremio
-(Addons → paste URL → Install).
-
-## Reconfigure or reset
-
-- **Change access mode or replace the admin account:**
-  `sudo bash install.sh --reconfigure` (or `streamvault setup`). Existing
-  data is kept; you can keep the current admin and only change the network
-  mode.
-- **Forgot the admin password:** delete `data/auth.db` in the install
-  directory, then run `--reconfigure` to create a new account. Other
-  settings and profiles are untouched.
-- **Full reset:** stop the service (`sudo systemctl stop streamvault`),
-  delete `data/` and `.env` in the install directory, then re-run
-  `sudo bash install.sh`. (Keep a backup of `data/` **plus the `SECRET_KEY`
-  line of `.env`** if you ever want to restore — the encrypted stores are
-  unreadable without that key.)
-- **Uninstall:** `sudo systemctl disable --now streamvault`, remove
-  `/etc/systemd/system/streamvault.service` and the install directory.
-
-## Day-to-day
-
-| Task | Command |
-|---|---|
-| Status | `systemctl status streamvault` |
-| Logs | `journalctl -u streamvault -f` |
-| Restart | `systemctl restart streamvault` (or the Restart button in Settings) |
-| CLI helper | `node bin/streamvault help` (status, profiles, backup) |
-
-## Alternative installs
-
-- **Standalone install.sh** (you only downloaded the script, not the repo):
-  `sudo bash install.sh --repo <repo-url>` clones the repo for you.
-- **Docker:** `docker compose up -d --build`, then run the wizard once inside
-  the container: `docker compose exec -it streamvault npm run setup`.
-
-See [DEPLOY.md](DEPLOY.md) for more operational detail.
-
-## Development
+## Commands
 
 ```bash
-npm install
-npm run setup      # terminal wizard: admin account + access mode
-npm start
+sudo systemctl status streamvault --no-pager
+sudo journalctl -u streamvault -f
+sudo systemctl restart streamvault
+sudo bash install.sh --reconfigure
 npm test
 ```
+
+## Docker alternative
+
+```bash
+cp .env.example .env
+nano .env
+docker compose up -d --build
+```
+
+
+## VPS fixes included
+
+### Broken IPv6 during npm install
+
+Some VPS images have working IPv4 but broken IPv6 routing. In that state `apt update` and `git clone` can work, while `npm install` fails with `ENETUNREACH` because Node tries IPv6 first for `registry.npmjs.org`.
+
+The installer now checks the npm registry over IPv4 and IPv6. If IPv4 works and IPv6 fails, it automatically runs npm with:
+
+```bash
+NODE_OPTIONS=--dns-result-order=ipv4first
+```
+
+It also retries `npm install` with IPv4-first DNS if npm fails with a network-unreachable style error.
+
+### Missing `.env.example`
+
+The repo includes `.env.example`. The installer also has a built-in fallback template, so a damaged or incomplete checkout will not die at:
+
+```text
+cp: cannot stat '.env.example'
+```
+
+### HTTPS for Stremio iOS
+
+StreamVault serves HTTP locally. For Stremio iOS, use a trusted HTTPS hostname through a reverse proxy. Create your own hostname first, then use it in Caddy and `PUBLIC_BASE_URL`. Example using your own hostname:
+
+```caddy
+https://your-hostname.example:8444 {
+    reverse_proxy 127.0.0.1:7005
+}
+```
+
+Then set:
+
+```env
+PUBLIC_BASE_URL=https://your-hostname.example:8444
+```
+
+If port `443` is already occupied by S-UI or another panel, either move that service off `443` or run Caddy on an alternate HTTPS port such as `8444` and open that TCP port in the firewall.
