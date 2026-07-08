@@ -26,7 +26,7 @@ Node.js (LTS), Redis and git are installed automatically if missing.
 ## Install
 
 ```bash
-git clone <repo-url> streamvault
+git clone https://github.com/ray0189/streamvault.git
 cd streamvault
 sudo bash install.sh
 ```
