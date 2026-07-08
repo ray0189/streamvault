@@ -1,187 +1,107 @@
-# StreamVault VPS Installation & HTTPS Setup Report
+# StreamVault — Deploy Guide
 
-## Overview
+Everything runs in Docker: the app, Redis, and the Cloudflare Tunnel.
+You do **not** need Node.js or Redis installed on the host.
 
-During deployment of StreamVault on a fresh Ubuntu VPS, three install/runtime issues were identified and fixed on this branch:
+## First-time setup
 
-1. `npm install` can fail with `ENETUNREACH` when the VPS has broken IPv6 routing and Node/npm prefers IPv6 DNS results.
-2. The installer expected `.env.example`; if that template was missing, install failed with `cp: cannot stat '.env.example'`.
-3. Stremio iOS may fail to fetch addon manifests over plain HTTP, so production use should expose StreamVault through a trusted HTTPS reverse proxy.
+1. Install Docker (includes Compose): https://docs.docker.com/engine/install/
+2. Copy the env template and fill it in:
+   ```bash
+   cp .env.example .env
+   nano .env       # set TORBOX_API_KEY, ADMIN_PASSWORD, SECRET_KEY, CF_TUNNEL_TOKEN
+   ```
+   - `TORBOX_API_KEY` — from https://torbox.app → Settings → API
+   - `CF_TUNNEL_TOKEN` — from Cloudflare Zero Trust → Networks → Tunnels
+     (create a tunnel, add a public hostname pointing to `http://localhost:7005`)
+   - `SECRET_KEY` — any long random string: `openssl rand -hex 32`
+3. Start everything:
+   ```bash
+   docker compose up -d --build
+   ```
+4. Open `http://<server-ip>:7005` (or your tunnel domain) and log in with
+   `ADMIN_PASSWORD`.
 
-## 1. npm installation failure caused by broken IPv6
+## Day-to-day
 
-### Problem
+| Task | Command |
+|---|---|
+| Status | `docker compose ps` |
+| App logs | `docker compose logs -f streamvault` |
+| Tunnel logs | `docker compose logs -f cloudflared` |
+| Restart app | `docker compose restart streamvault` |
+| Apply code changes | `docker compose up -d --build` |
+| Stop everything | `docker compose down` |
 
-`apt update`, Git clone, and IPv4 connectivity worked, but `npm install` failed with a network unreachable error.
+Settings changed in the dashboard are written to `.env` (bind-mounted into
+the container) and survive restarts. Most need a restart to apply — use the
+Restart button on the Settings page; Docker brings the app back automatically.
 
-Testing showed:
+## What persists where
+
+- `.env` — all configuration (bind mount)
+- `./data/` — profiles (bind mount)
+- `redis-data` volume — stream cache
+
+## Gotchas
+
+- `REDIS_URL` is forced to `redis://redis:6379` by docker-compose; editing it
+  in the dashboard has no effect (the UI shows it as managed).
+- The tunnel reuses your existing Cloudflare tunnel token — no DNS changes
+  needed when moving hosts; just stop the old connector.
+
+
+## VPS troubleshooting notes
+
+### npm `ENETUNREACH` / broken IPv6
+
+If `npm install` fails with `ENETUNREACH` but normal IPv4 internet works, the VPS likely has broken IPv6 routing while Node prefers IPv6 DNS answers. The installer detects this by checking:
 
 ```bash
-curl -4 https://registry.npmjs.org
+curl -4 https://registry.npmjs.org/
+curl -6 https://registry.npmjs.org/
 ```
 
-worked, while:
-
-```bash
-curl -6 https://registry.npmjs.org
-```
-
-failed immediately. The VPS advertised/attempted IPv6, but did not have working IPv6 routing.
-
-### Fix
-
-The installer now detects this condition and automatically applies:
+When IPv4 works and IPv6 fails, it automatically exports:
 
 ```bash
 NODE_OPTIONS=--dns-result-order=ipv4first
 ```
 
-for the npm install step. If npm still fails with `ENETUNREACH`, `EHOSTUNREACH`, `network is unreachable`, or an IPv6-looking error, the installer retries npm with IPv4-first DNS.
-
 Manual fallback:
 
 ```bash
-export NODE_OPTIONS=--dns-result-order=ipv4first
 sudo env NODE_OPTIONS=--dns-result-order=ipv4first bash install.sh
 ```
 
-## 2. Missing `.env.example`
+### `.env.example`
 
-### Problem
+`.env.example` is required because the installer copies it to `.env` on first install. It is included in the repo. If it is missing from a broken checkout, the installer writes a safe default template and continues.
 
-The installer previously failed when `.env.example` was missing:
+### HTTPS / Caddy / DuckDNS
 
-```text
-cp: cannot stat '.env.example'
-```
+StreamVault only serves HTTP. Use HTTPS through a reverse proxy for Stremio iOS and other strict clients.
 
-### Fix
-
-This branch includes `.env.example` and the installer also has a built-in fallback template. If the file is missing, it writes a safe default template and continues instead of terminating.
-
-The template uses the working NAS model:
-
-```env
-TORBOX_API_KEY=
-TORBOX_API_URL=https://api.torbox.app/v1/api
-DEFAULT_CACHED_ONLY=true
-DEFAULT_MIN_QUALITY=1080p
-PUBLIC_BASE_URL=
-REDIS_URL=redis://127.0.0.1:6379
-```
-
-Do not commit the real `.env` file because it contains secrets.
-
-## 3. HTTPS for Stremio iOS
-
-StreamVault itself serves plain HTTP. If Stremio iOS fails with `Failed to fetch` and the StreamVault logs show no incoming request, the failure is likely happening before the app receives the request. Use a trusted HTTPS endpoint.
-
-### DuckDNS
-
-Example hostname:
-
-```text
-rvault.duckdns.org
-```
-
-pointing to the VPS IP:
-
-```text
-57.129.128.16
-```
-
-Verify DNS:
-
-```bash
-dig +short rvault.duckdns.org
-```
-
-### Caddy reverse proxy
-
-When port 443 is free:
+Example DuckDNS + Caddy setup:
 
 ```caddy
-rvault.duckdns.org {
+vault.example.com {
     reverse_proxy 127.0.0.1:7005
 }
 ```
 
-Set:
-
-```env
-PUBLIC_BASE_URL=https://rvault.duckdns.org
-```
-
-### S-UI / port 443 conflict
-
-If S-UI or another service is already listening on port 443, Caddy cannot bind to 443:
-
-```text
-listen tcp :443: bind: address already in use
-```
-
-Check:
-
-```bash
-sudo ss -lntp | grep ':443'
-```
-
-Temporary alternate-port Caddy config:
+If another service such as S-UI already owns port `443`, use an alternate HTTPS port temporarily:
 
 ```caddy
-https://rvault.duckdns.org:8444 {
+https://vault.example.com:8444 {
     reverse_proxy 127.0.0.1:7005
 }
 ```
 
-Open the firewall:
-
-```bash
-sudo ufw allow 8444/tcp
-```
-
-Set:
+Open the matching firewall port and set:
 
 ```env
-PUBLIC_BASE_URL=https://rvault.duckdns.org:8444
+PUBLIC_BASE_URL=https://vault.example.com:8444
 ```
 
-Verify:
-
-```bash
-curl -kI https://rvault.duckdns.org:8444/health
-curl -k https://rvault.duckdns.org:8444/health
-```
-
-## Current known-good VPS shape
-
-```text
-StreamVault app:  http://127.0.0.1:7005
-Caddy HTTPS:      https://rvault.duckdns.org:8444
-Systemd service:  streamvault.service
-Config file:      /opt/streamvault/.env
-```
-
-Health check:
-
-```bash
-curl http://127.0.0.1:7005/health
-curl -k https://rvault.duckdns.org:8444/health
-```
-
-## Reinstall on VPS
-
-```bash
-sudo systemctl disable --now streamvault 2>/dev/null || true
-sudo rm -rf /opt/streamvault ~/streamvault
-
-git clone https://github.com/ray0189/streamvault.git ~/streamvault
-cd ~/streamvault
-sudo bash install.sh --dir /opt/streamvault --port 7005
-```
-
-For the current Caddy alternate HTTPS port setup, use this public URL in the setup wizard:
-
-```text
-https://rvault.duckdns.org:8444
-```
+Do not point Stremio at `https://<ip>:7005`; StreamVault is not a TLS server and trusted public TLS certs are normally issued for hostnames, not bare IP addresses.
