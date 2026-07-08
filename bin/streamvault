@@ -1,0 +1,206 @@
+#!/usr/bin/env node
+'use strict';
+const fs=require('fs'),path=require('path'),http=require('http'),rlm=require('readline');
+const ROOT=path.join(__dirname,'..'),ENV_PATH=path.join(ROOT,'.env');
+const R='\x1b[31m',G='\x1b[32m',Y='\x1b[33m',C='\x1b[36m',W='\x1b[1m\x1b[37m',DIM='\x1b[2m',B='\x1b[1m',NC='\x1b[0m';
+const ok=m=>console.log(`  ${G}✓${NC} ${m}`);
+const fail=m=>{console.log(`\n  ${R}✗ ${m}${NC}\n`);process.exit(1);};
+const sep=()=>console.log(`\n  ${DIM}${'─'.repeat(44)}${NC}`);
+const hdr=m=>console.log(`\n  ${W}${m}${NC}`);
+const ask=(rl,q)=>new Promise(r=>rl.question(q,r));
+function loadEnv(){
+  if(!fs.existsSync(ENV_PATH))fail('No config. Run: streamvault setup');
+  const cfg={};
+  for(const line of fs.readFileSync(ENV_PATH,'utf8').split('\n')){
+    if(!line.trim()||line.startsWith('#'))continue;
+    const[k,...rest]=line.split('=');if(k)cfg[k.trim()]=rest.join('=').trim();
+  }
+  return cfg;
+}
+function saveEnv(cfg){fs.writeFileSync(ENV_PATH,Object.entries(cfg).map(([k,v])=>`${k}=${v}`).join('\n')+'\n',{mode:0o600});}
+function normUrl(v){v=(v||'').trim().replace(/\/$/,'');return v?/^https?:\/\//i.test(v)?v:'https://'+v:'';}
+function getBase(cfg){return normUrl(cfg.PUBLIC_BASE_URL)||(cfg.NAS_LOCAL_IP?`http://${cfg.NAS_LOCAL_IP}:${cfg.PORT||7000}`:`http://localhost:${cfg.PORT||7000}`);}
+function mUrl(id,cfg){return`${getBase(cfg)}/config/${id}/manifest.json`;}
+function apiReq(method,p,body,cfg,token){
+  return new Promise((res,rej)=>{
+    const data=body?JSON.stringify(body):null;
+    const opts={hostname:'localhost',port:parseInt(cfg.PORT||7000),path:p,method,
+      headers:{'x-admin-token':token||'','Content-Type':'application/json',...(data?{'Content-Length':Buffer.byteLength(data)}:{})}};
+    const req=http.request(opts,r=>{let raw='';r.on('data',d=>raw+=d);r.on('end',()=>{try{res({s:r.statusCode,d:JSON.parse(raw)});}catch{res({s:r.statusCode,d:raw});}});});
+    req.on('error',rej);if(data)req.write(data);req.end();
+  });
+}
+// Prompt for the dashboard credentials and exchange them for a session token.
+async function login(cfg){
+  const rl=rlm.createInterface({input:process.stdin,output:process.stdout});
+  const user=(await ask(rl,'  Dashboard username: ')).trim();
+  const pass=await new Promise(res=>{
+    const orig=rl._writeToOutput;const q='  Password (hidden): ';
+    rl.question(q,a=>{rl._writeToOutput=orig;process.stdout.write('\n');res(a);});
+    rl._writeToOutput=s=>{if(s.startsWith(q))process.stdout.write(q);};
+  });
+  rl.close();
+  const r=await apiReq('POST','/api/auth/login',{username:user,password:pass},cfg);
+  if(r.s!==200||!r.d.token)fail('Login failed: '+(r.d&&r.d.error||'wrong credentials'));
+  return r.d.token;
+}
+function autoIp(){try{const nets=require('os').networkInterfaces();for(const iface of Object.values(nets))for(const n of iface)if(n.family==='IPv4'&&!n.internal)return n.address;}catch{}return'127.0.0.1';}
+
+// Setup lives in scripts/setup.js (admin account + access mode) — one wizard
+// for install.sh, `streamvault setup` and `npm run setup`.
+async function cmdSetup(){
+  const{spawnSync}=require('child_process');
+  const r=spawnSync(process.execPath,[path.join(ROOT,'scripts/setup.js')],{stdio:'inherit'});
+  process.exit(r.status||0);
+}
+
+async function cmdStatus(){
+  const cfg=loadEnv();hdr('Status');sep();
+  try{const r=await apiReq('GET','/health',null,cfg);
+    console.log(r.s===200?`  Service  ${G}● Running${NC}`:`  Service  ${Y}● ${r.s}${NC}`);
+    if(r.d?.uptime!==undefined)console.log(`  Uptime   ${DIM}${Math.floor(r.d.uptime/60)}m${NC}`);
+  }catch{console.log(`  Service  ${R}● Unreachable${NC}`);}
+  try{const r=await apiReq('GET','/api/info',null,cfg);
+    if(r.d){
+      console.log(`  Redis    ${r.d.redis==='connected'?G:Y}● ${r.d.redis}${NC}`);
+      console.log(`  Memory   ${DIM}${r.d.memory}${NC}`);
+      if(r.d.publicUrl)console.log(`  URL      ${C}${r.d.publicUrl}${NC}`);
+    }
+  }catch{}console.log('');
+}
+
+async function cmdConfig(args){
+  const cfg=loadEnv();const sub=args[0]||'show';
+  if(sub==='show'){
+    hdr('Config');sep();
+    [['Port',cfg.PORT||'7000'],['Public URL',cfg.PUBLIC_BASE_URL||'(not set)'],['Local IP',cfg.NAS_LOCAL_IP||'(not set)'],
+     ['TorBox','(encrypted — see dashboard Settings)'],['CF Domain',cfg.CF_DOMAIN||'(not set)'],
+     ['CF Tunnel','(encrypted — see streamvault setup)'],['Cache TTL',(cfg.STREAM_CACHE_TTL||1800)+'s'],
+     ['Min quality',cfg.DEFAULT_MIN_QUALITY||'1080p'],['Cached only',cfg.DEFAULT_CACHED_ONLY||'true'],['Language',cfg.DEFAULT_LANGUAGE||'en'],
+    ].forEach(([k,v])=>console.log(`  ${k.padEnd(12)} ${C}${v}${NC}`));console.log('');return;
+  }
+  if(['set-torbox','set-password','set-cf-token'].includes(sub)){
+    fail(`Secrets are no longer stored in .env. TorBox key: dashboard Settings page. Password: dashboard Account section. Tunnel token: streamvault setup`);
+  }
+  const map={'set-url':'PUBLIC_BASE_URL',
+    'set-cache':'STREAM_CACHE_TTL','set-cf-domain':'CF_DOMAIN','set-ip':'NAS_LOCAL_IP','set-port':'PORT'};
+  if(map[sub]){
+    const val=args.slice(1).join(' ');if(!val)fail(`Usage: streamvault config ${sub} <value>`);
+    cfg[map[sub]]=val;saveEnv(cfg);ok(`${sub.replace('set-','')} updated`);
+    console.log(`  ${DIM}Restart to apply: streamvault restart${NC}\n`);return;
+  }
+  if(sub==='set'){const[,k,...vp]=args;if(!k||!vp.length)fail('Usage: streamvault config set KEY VALUE');cfg[k]=vp.join(' ');saveEnv(cfg);ok(`${k}=${cfg[k]}\n`);return;}
+  fail(`Unknown: streamvault config ${sub}`);
+}
+
+async function cmdProfile(args){
+  const cfg=loadEnv();const sub=args[0]||'list';
+  const token=await login(cfg);
+  if(sub==='list'){
+    const r=await apiReq('GET','/api/profiles',null,cfg,token);
+    if(r.s===401)fail('Session rejected — wrong credentials?');
+    const ps=r.d||[];hdr(`Profiles (${ps.length})`);sep();
+    if(!ps.length){console.log(`\n  ${DIM}None. Run: streamvault profile add${NC}\n`);return;}
+    for(const p of ps){const pr=p.prefs||{};
+      console.log(`\n  ${W}${p.name}${NC}  ${DIM}${p.configId.slice(0,8)}…${NC}`);
+      console.log(`  ${DIM}${pr.minQuality||'1080p'} · cached:${pr.cachedOnly??true}${NC}`);
+      console.log(`  ${C}${mUrl(p.configId,cfg)}${NC}`);
+    }console.log('');return;
+  }
+  if(sub==='add'){
+    const rl=rlm.createInterface({input:process.stdin,output:process.stdout});
+    hdr('New Profile');sep();
+    console.log(`\n  ${W}Name${NC}`);let name='';
+    while(!name){name=(await ask(rl,'  › ')).trim();if(!name)console.log(`  ${R}Required${NC}`);}
+    console.log(`\n  ${W}Min resolution${NC}  ${DIM}[${cfg.DEFAULT_MIN_QUALITY||'1080p'}]${NC}`);
+    const ri=(await ask(rl,'  › ')).trim();const mq=ri||cfg.DEFAULT_MIN_QUALITY||'1080p';
+    console.log(`\n  ${W}Cached only?${NC}  ${DIM}[Y/n]${NC}`);
+    const ci=(await ask(rl,'  › ')).trim();const co=ci?ci.toLowerCase()!=='n':(cfg.DEFAULT_CACHED_ONLY!=='false');
+    console.log(`\n  ${W}Language${NC}  ${DIM}[${cfg.DEFAULT_LANGUAGE||'en'}]${NC}`);
+    const li=(await ask(rl,'  › ')).trim();const lang=li||cfg.DEFAULT_LANGUAGE||'en';
+    rl.close();
+    const r=await apiReq('POST','/api/profiles',{name,prefs:{minQuality:mq,cachedOnly:co,language:lang}},cfg,token);
+    if(r.s!==200)fail('Failed — is StreamVault running? (streamvault status)');
+    sep();console.log(`\n  ${G}✓ ${name}${NC}\n  ${C}${mUrl(r.d.configId,cfg)}${NC}`);
+    console.log(`\n  ${DIM}Stremio: Search addons → paste URL → Install${NC}\n`);return;
+  }
+  if(sub==='url'){
+    const n=args[1];if(!n)fail('Usage: streamvault profile url <name>');
+    const r=await apiReq('GET','/api/profiles',null,cfg,token);
+    const p=(r.d||[]).find(p=>p.name.toLowerCase()===n.toLowerCase()||p.configId.startsWith(n));
+    if(!p)fail(`"${n}" not found`);console.log(`\n  ${C}${mUrl(p.configId,cfg)}${NC}\n`);return;
+  }
+  if(['del','delete','remove'].includes(sub)){
+    const n=args[1];if(!n)fail('Usage: streamvault profile del <name>');
+    const r=await apiReq('GET','/api/profiles',null,cfg,token);
+    const p=(r.d||[]).find(p=>p.name.toLowerCase()===n.toLowerCase()||p.configId.startsWith(n));
+    if(!p)fail(`"${n}" not found`);
+    const rl=rlm.createInterface({input:process.stdin,output:process.stdout});
+    const c=await ask(rl,`  Delete "${p.name}"? [y/N] `);rl.close();
+    if(c.toLowerCase()!=='y'){console.log('  Cancelled\n');return;}
+    await apiReq('DELETE',`/api/profiles/${p.configId}`,null,cfg,token);ok(`Deleted "${p.name}"\n`);return;
+  }
+  fail(`Unknown: streamvault profile ${sub}`);
+}
+
+function cmdHelp(){console.log(`
+  ${C}${B}streamvault${NC} — StreamVault v2
+
+  ${W}Setup & Config${NC}
+  ${C}streamvault setup${NC}                     Terminal wizard: admin account + access mode
+  ${C}streamvault config${NC}                    Show config
+  ${C}streamvault config set-url <url>${NC}      Set public domain
+  ${C}streamvault config set-cache <secs>${NC}   Cache TTL (default: 1800)
+  ${C}streamvault config set-cf-domain <d>${NC}  Cloudflare domain
+  ${C}streamvault config set KEY VALUE${NC}       Set any .env variable
+  ${DIM}Secrets (TorBox key, password, tunnel token) are managed via the
+  dashboard Settings page or streamvault setup — never .env.${NC}
+
+  ${W}Profiles${NC}
+  ${C}streamvault profile add${NC}               Create profile → manifest URL
+  ${C}streamvault profile list${NC}              List profiles + URLs
+  ${C}streamvault profile url <name>${NC}        Print manifest URL
+  ${C}streamvault profile del <name>${NC}        Delete profile
+
+  ${W}Service${NC}
+  ${C}streamvault status${NC}                    Health check
+  ${C}streamvault logs${NC}                      Live logs
+  ${C}streamvault restart${NC}                   Restart service
+
+  ${W}Backup${NC}
+  ${C}streamvault backup${NC}                    Backup config + data
+  ${C}streamvault restore <file>${NC}            Restore from backup
+`);}
+
+const[,,cmd,...args]=process.argv;
+(async()=>{
+  switch(cmd){
+    case 'setup':await cmdSetup();break;
+    case 'status':await cmdStatus();break;
+    case 'config':await cmdConfig(args);break;
+    case 'profile':case 'profiles':await cmdProfile(args);break;
+    case 'backup':{
+      const ts=new Date().toISOString().slice(0,16).replace(/:/g,'-');
+      const dest=path.join(ROOT,'backups',`backup-${ts}.tar.gz`);
+      fs.mkdirSync(path.join(ROOT,'backups'),{recursive:true});
+      require('child_process').execSync(`tar -czf ${dest} -C ${ROOT} .env data 2>/dev/null||true`);
+      ok(`Backup: ${dest}\n`);break;
+    }
+    case 'restore':{
+      const f=args[0];if(!f)fail('Usage: streamvault restore <file>');
+      if(!fs.existsSync(f))fail('File not found: '+f);
+      require('child_process').execSync(`tar -xzf ${f} -C ${ROOT}`);ok('Restored from '+f+'\n');break;
+    }
+    case 'logs':{
+      const{execSync}=require('child_process');
+      try{execSync('sudo journalctl -u streamvault -f --no-pager',{stdio:'inherit'});}
+      catch{execSync(`tail -f ${path.join(ROOT,'logs/streamvault.log')}`,{stdio:'inherit'});}break;
+    }
+    case 'restart':{
+      try{require('child_process').execSync('sudo systemctl restart streamvault',{stdio:'inherit'});ok('Restarted\n');}
+      catch{console.log(`  ${Y}Try: sudo systemctl restart streamvault${NC}\n`);}break;
+    }
+    case 'help':case '--help':case '-h':case undefined:cmdHelp();break;
+    default:console.log(`\n  ${R}Unknown: ${cmd}${NC}  Run ${C}streamvault help${NC}\n`);process.exit(1);
+  }
+})().catch(e=>{console.error('\n  Error:',e.message,'\n');process.exit(1);});

@@ -1,0 +1,36 @@
+# StreamVault stack: app + redis + cloudflare tunnel.
+#
+# .env handling: the app's .env is bind-mounted (not env_file) so settings
+# saved from the dashboard persist and are re-read by dotenv on container
+# restart. env_file would bake values in at container *creation* and stale
+# them after a dashboard save. REDIS_URL is forced via environment: because
+# dotenv never overrides an already-set env var.
+services:
+  streamvault:
+    build: .
+    container_name: streamvault
+    restart: unless-stopped
+    ports:
+      - "7005:7005"
+    environment:
+      - REDIS_URL=redis://redis:6379
+    volumes:
+      - ./.env:/app/.env
+      - ./data:/app/data
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    container_name: streamvault-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+
+  # No separate cloudflared service: the app supervises its own tunnel
+  # connector when a token is configured via the setup wizard
+  # (docker compose exec -it streamvault npm run setup).
+
+volumes:
+  redis-data:

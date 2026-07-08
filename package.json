@@ -1,0 +1,29 @@
+{
+  "name": "stremio-private-addon",
+  "version": "1.0.0",
+  "description": "Private self-hosted Stremio addon with TorBox integration",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "NODE_ENV=test node tests/run.js",
+    "setup": "node scripts/setup.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "bcryptjs": "^3.0.3",
+    "chalk": "^4.1.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "form-data": "^4.0.5",
+    "ioredis": "^5.10.1",
+    "morgan": "^1.10.0",
+    "node-cache": "^5.1.2",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}

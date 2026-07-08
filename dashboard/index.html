@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>StreamVault</title>
+<script>
+(function(){
+  var t = localStorage.getItem('sv_theme') || 'dark';
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="css/base.css"/>
+<link rel="stylesheet" href="css/components.css"/>
+<link rel="stylesheet" href="css/pages.css"/>
+</head>
+<body>
+<div id="toast"></div>
+
+<!-- Profile create/edit modal -->
+<div class="mwrap" id="profile-modal">
+  <div class="modal wide">
+    <div class="mt" id="pf-title">New profile</div>
+    <div class="ms" id="pf-sub">Creates a unique private manifest URL for a device or person.</div>
+
+    <div class="fg">
+      <label class="fl">Profile name</label>
+      <input class="fi" id="pf-name" placeholder="e.g. Living Room 4K, Bedroom iPad"/>
+      <div class="fhint" id="pf-name-hint" style="display:none">Renaming isn't supported yet — delete and recreate to change the name.</div>
+    </div>
+
+    <div class="fg">
+      <label class="fl">Minimum quality</label>
+      <div class="bgrp" id="pf-minq"></div>
+    </div>
+
+    <div class="fg">
+      <label class="fl">Maximum quality</label>
+      <div class="bgrp" id="pf-maxq"></div>
+      <div class="fhint">Display only for now — not yet enforced server-side.</div>
+    </div>
+
+    <div class="fg">
+      <label class="fl">Language preference</label>
+      <div class="bgrp" id="pf-lang"></div>
+    </div>
+
+    <div class="fg">
+      <label class="fl">Debrid provider</label>
+      <div class="bgrp" id="pf-debrid"></div>
+    </div>
+
+    <div class="tr">
+      <div><div class="trn">Cached only</div><div class="trd">Only streams already cached on TorBox</div></div>
+      <label class="tog"><input type="checkbox" id="pf-cached" checked/><div class="tt"></div></label>
+    </div>
+
+    <div class="mrow">
+      <button class="btn btn-primary" style="flex:1" id="pf-save" onclick="Profiles.save()">Generate manifest</button>
+      <button class="btn btn-ghost" onclick="closeModal('profile-modal')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Generic confirmation modal (delete profile, restart, etc) -->
+<div class="mwrap" id="confirm-modal">
+  <div class="modal danger">
+    <div class="mt" id="cf-title">Are you sure?</div>
+    <div class="ms" id="cf-body"></div>
+    <div class="mrow">
+      <button class="btn btn-danger" style="flex:1" id="cf-confirm">Confirm</button>
+      <button class="btn btn-ghost" onclick="closeModal('confirm-modal')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Sidebar -->
+<div id="sb">
+  <div class="sb-top">
+    <div class="sb-logo">
+      <div class="sb-mark"><svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9V3z"/></svg></div>
+      <div><div class="sb-name">StreamVault</div><div class="sb-ver">TorBox Pro</div></div>
+    </div>
+  </div>
+  <nav class="sb-nav">
+    <div class="ns">Dashboard</div>
+    <div class="ni on" id="ni-dash" onclick="go('dash')">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Overview
+    </div>
+    <div class="ni" id="ni-profiles" onclick="go('profiles')">
+      <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>Profiles
+    </div>
+    <div class="ns">Config</div>
+    <div class="ni" id="ni-scoring" onclick="go('scoring')">
+      <svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>Scoring
+    </div>
+    <div class="ni" id="ni-filters" onclick="go('filters')">
+      <svg viewBox="0 0 24 24"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>Filters
+    </div>
+    <div class="ni" id="ni-settings" onclick="go('settings')">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Settings
+    </div>
+  </nav>
+  <div class="sb-foot">
+    <div class="st-row"><div class="st-dot" id="sdot"></div><div class="st-lbl" id="slbl">Connecting…</div></div>
+    <div style="display:flex;gap:6px;flex-shrink:0">
+      <button class="sb-icon-btn" id="theme-toggle" title="Toggle theme"></button>
+      <button class="sb-icon-btn" id="logout-btn" title="Log out"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
+    </div>
+  </div>
+</div>
+
+<!-- Main -->
+<div id="main">
+
+  <!-- Auth -->
+  <div class="pg on" id="pg-auth" style="display:flex">
+    <div class="ac">
+      <div class="a-emb"><svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+      <div class="a-t">Sign in</div>
+      <div class="a-s">Log in with your StreamVault admin account.</div>
+      <div class="a-f" style="flex-direction:column;gap:10px">
+        <input class="inp" type="text" id="lg-user" placeholder="Username" autocomplete="username" onkeydown="if(event.key==='Enter')Auth.login()"/>
+        <input class="inp" type="password" id="pw" placeholder="Password" autocomplete="current-password" onkeydown="if(event.key==='Enter')Auth.login()"/>
+        <button class="btn btn-primary" onclick="Auth.login()">Sign in</button>
+      </div>
+      <div class="a-err" id="aerr">Invalid username or password</div>
+    </div>
+  </div>
+
+  <!-- Overview -->
+  <div class="pg" id="pg-dash">
+    <div class="pg-h"><div class="pg-t">Overview</div><div class="pg-s">System health and cache performance.</div></div>
+    <div class="sg">
+      <div class="sc"><div class="sc-ey">Active profiles</div><div class="sc-v" id="sv-p">—</div><div class="sc-sub">manifest URLs live</div></div>
+      <div class="sc"><div class="sc-ey">Cache hits</div><div class="sc-v" id="sv-h">—</div><div class="sc-sub">stream lookups served</div></div>
+      <div class="sc"><div class="sc-ey">Redis keys</div><div class="sc-v" id="sv-k">—</div><div class="sc-sub">entries cached</div></div>
+    </div>
+    <div><div class="sh"><div class="sl">System</div></div><div class="pn" id="sys-rows"></div></div>
+  </div>
+
+  <!-- Profiles -->
+  <div class="pg" id="pg-profiles">
+    <div class="pg-h">
+      <div class="pg-h-row">
+        <div><div class="pg-t">Profiles</div><div class="pg-s">Each profile has a unique manifest URL for Stremio.</div></div>
+        <button class="btn btn-primary" onclick="Profiles.openCreate()">+ New profile</button>
+      </div>
+    </div>
+    <div class="pn" id="prof-panel"></div>
+  </div>
+
+  <!-- Scoring -->
+  <div class="pg" id="pg-scoring">
+    <div class="pg-h"><div class="pg-t">Scoring weights</div><div class="pg-s">Per-profile. Higher weight = more preferred when ranking streams.</div></div>
+    <div class="selrow"><label class="fl">Profile</label><select class="fsel" id="sc-profile-select"></select></div>
+    <div class="pn" id="score-rows"></div>
+    <button class="btn btn-primary" onclick="Scoring.save()">Save scoring</button>
+  </div>
+
+  <!-- Filters -->
+  <div class="pg" id="pg-filters">
+    <div class="pg-h"><div class="pg-t">Blocked releases</div><div class="pg-s">Per-profile. These release types are filtered out for the selected profile.</div></div>
+    <div class="selrow"><label class="fl">Profile</label><select class="fsel" id="fl-profile-select"></select></div>
+    <div class="pn" id="filter-panel">
+      <div class="tagwrap" id="bwrap"></div>
+      <div class="suggestwrap" id="suggest-wrap"></div>
+      <div class="tagaddrow">
+        <input class="inp" id="fl-newtag" placeholder="Add a custom tag, e.g. WORKPRINT" onkeydown="if(event.key==='Enter')Filters.addFromInput()"/>
+        <button class="btn btn-ghost" onclick="Filters.addFromInput()">Add</button>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="Filters.save()">Save filters</button>
+  </div>
+
+  <!-- Settings -->
+  <div class="pg" id="pg-settings">
+    <div class="pg-h"><div class="pg-t">Settings</div><div class="pg-s">Stored in .env. Changes marked “restart” apply after a service restart — Docker brings it back automatically.</div></div>
+
+    <div class="set-banner" id="set-banner">Saved — restart the service to apply. <button class="btn btn-ghost btn-xs" style="margin-left:auto" onclick="Settings.confirmRestart()">Restart now</button></div>
+
+    <!-- Streaming -->
+    <div class="set-section">
+      <div class="sh"><div class="sl">Streaming</div></div>
+      <div class="pn set-form">
+        <div class="set-field">
+          <label class="fl">Public base URL</label>
+          <input class="fi" id="set-public-url" placeholder="https://yourdomain.com"/>
+          <div class="ferr" id="err-public-url"></div>
+          <div class="fhint">Used in manifest URLs handed to Stremio. Applies live.</div>
+        </div>
+        <div class="set-field">
+          <label class="fl">NAS / LAN IP <span class="fl-opt">optional</span></label>
+          <input class="fi" id="set-nas-ip" placeholder="192.168.1.100"/>
+          <div class="ferr" id="err-nas-ip"></div>
+          <div class="fhint">Adds a LAN manifest URL for devices on your home network.</div>
+        </div>
+        <div class="set-field">
+          <label class="fl">Provider priority</label>
+          <input class="fi" id="set-provider-priority" placeholder="torbox-torrent,torbox-usenet,library,torrentio,knightcrawler"/>
+          <div class="ferr" id="err-provider-priority"></div>
+          <div class="fhint">Comma-separated search order. Restart to apply.</div>
+        </div>
+        <div class="tr"><div><div class="trn">External torrent fallback</div><div class="trd">Query public indexers when TorBox has nothing cached</div></div><label class="tog"><input type="checkbox" id="set-ext-fallback"/><div class="tt"></div></label></div>
+        <div class="tr"><div><div class="trn">Torrentio</div><div class="trd">Use Torrentio as an external source</div></div><label class="tog"><input type="checkbox" id="set-torrentio"/><div class="tt"></div></label></div>
+        <div class="tr"><div><div class="trn">KnightCrawler</div><div class="trd">Use KnightCrawler as an external source</div></div><label class="tog"><input type="checkbox" id="set-knightcrawler"/><div class="tt"></div></label></div>
+        <div class="set-actions"><span class="set-note">Restart required</span><button class="btn btn-primary btn-sm" id="save-streaming" onclick="Settings.saveSection('streaming')">Save streaming</button></div>
+      </div>
+    </div>
+
+    <!-- TorBox -->
+    <div class="set-section">
+      <div class="sh"><div class="sl">TorBox</div></div>
+      <div class="pn set-form">
+        <div class="set-field">
+          <label class="fl">API key</label>
+          <div class="set-row">
+            <div class="fg"><input class="fi" type="password" id="set-torbox-key" placeholder="Not set" autocomplete="off"/></div>
+            <button class="btn btn-ghost btn-sm" id="set-torbox-key-eye" onclick="Settings.toggleSecret('set-torbox-key', true)">Show</button>
+          </div>
+          <div class="ferr" id="err-torbox-key"></div>
+          <div class="fhint">Leave untouched to keep the current key. Restart to apply.</div>
+        </div>
+        <div class="set-field">
+          <label class="fl">API URL</label>
+          <input class="fi" id="set-torbox-url" placeholder="https://api.torbox.app/v1/api"/>
+          <div class="ferr" id="err-torbox-url"></div>
+        </div>
+        <div class="set-grid2">
+          <div class="set-field">
+            <label class="fl">Request timeout (ms)</label>
+            <input class="fi" type="number" id="set-torbox-timeout" min="1000" max="120000" step="500"/>
+            <div class="ferr" id="err-torbox-timeout"></div>
+          </div>
+          <div class="set-field">
+            <label class="fl">Retries</label>
+            <input class="fi" type="number" id="set-torbox-retries" min="1" max="10"/>
+            <div class="ferr" id="err-torbox-retries"></div>
+          </div>
+        </div>
+        <div class="tr"><div><div class="trn">Native search</div><div class="trd">Use TorBox's own search API</div></div><label class="tog"><input type="checkbox" id="set-torbox-native"/><div class="tt"></div></label></div>
+        <div class="tr"><div><div class="trn">Usenet</div><div class="trd">Include Usenet results (needs a TorBox plan with Usenet)</div></div><label class="tog"><input type="checkbox" id="set-torbox-usenet"/><div class="tt"></div></label></div>
+        <div class="tr"><div><div class="trn">User search engines</div><div class="trd">Include your custom TorBox search engines</div></div><label class="tog"><input type="checkbox" id="set-torbox-engines"/><div class="tt"></div></label></div>
+        <div class="set-actions">
+          <button class="btn btn-ghost btn-sm" id="btn-test-torbox" onclick="Settings.testTorbox()">Test TorBox connection</button>
+          <span class="set-test-result" id="torbox-test-result"></span>
+          <span style="flex:1"></span>
+          <span class="set-note">Restart required</span>
+          <button class="btn btn-primary btn-sm" id="save-torbox" onclick="Settings.saveSection('torbox')">Save TorBox</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cache -->
+    <div class="set-section">
+      <div class="sh"><div class="sl">Cache</div></div>
+      <div class="pn set-form">
+        <div class="set-field">
+          <label class="fl">Redis URL <span class="chip chip-accent" id="redis-managed-chip" style="display:none">managed by Docker</span></label>
+          <input class="fi" id="set-redis" placeholder="redis://redis:6379"/>
+          <div class="ferr" id="err-redis"></div>
+          <div class="fhint" id="redis-hint">Restart to apply.</div>
+        </div>
+        <div class="set-grid2">
+          <div class="set-field">
+            <label class="fl">Stream cache TTL (s)</label>
+            <input class="fi" type="number" id="set-ttl-stream" min="60" max="604800"/>
+            <div class="ferr" id="err-ttl-stream"></div>
+          </div>
+          <div class="set-field">
+            <label class="fl">Metadata cache TTL (s)</label>
+            <input class="fi" type="number" id="set-ttl-meta" min="60" max="604800"/>
+            <div class="ferr" id="err-ttl-meta"></div>
+          </div>
+        </div>
+        <div class="fhint" style="padding:0 20px 6px">TTL range: 60 s – 7 days. Restart to apply; flush the cache to drop entries stored under the old TTL.</div>
+        <div class="set-actions">
+          <button class="btn btn-ghost btn-sm" id="btn-flush-cache" onclick="Settings.flushCache()">Flush cache</button>
+          <span class="set-test-result" id="flush-result"></span>
+          <span style="flex:1"></span>
+          <span class="set-note">Restart required</span>
+          <button class="btn btn-primary btn-sm" id="save-cache" onclick="Settings.saveSection('cache')">Save cache</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Defaults -->
+    <div class="set-section">
+      <div class="sh"><div class="sl">Defaults for new profiles</div></div>
+      <div class="pn set-form">
+        <div class="set-field">
+          <label class="fl">Minimum quality</label>
+          <div class="bgrp" id="set-minq"></div>
+        </div>
+        <div class="set-field">
+          <label class="fl">Language</label>
+          <input class="fi" id="set-language" placeholder="en" maxlength="8" style="max-width:120px"/>
+          <div class="ferr" id="err-language"></div>
+        </div>
+        <div class="tr"><div><div class="trn">Cached only</div><div class="trd">New profiles only show streams TorBox already has cached</div></div><label class="tog"><input type="checkbox" id="set-cached-only"/><div class="tt"></div></label></div>
+        <div class="fhint" style="padding:0 20px 6px">Only affects profiles created after saving. Existing profiles keep their own settings. Restart to apply.</div>
+        <div class="set-actions"><span class="set-note">Restart required</span><button class="btn btn-primary btn-sm" id="save-defaults" onclick="Settings.saveSection('defaults')">Save defaults</button></div>
+      </div>
+    </div>
+
+    <!-- Account -->
+    <div class="set-section">
+      <div class="sh"><div class="sl">Account</div></div>
+      <div class="pn set-form">
+        <div class="set-field">
+          <label class="fl">Current password</label>
+          <input class="fi" type="password" id="set-current-password" autocomplete="current-password"/>
+          <div class="ferr" id="err-current-password"></div>
+        </div>
+        <div class="set-field">
+          <label class="fl">New password</label>
+          <div class="set-row">
+            <div class="fg"><input class="fi" type="password" id="set-new-password" autocomplete="new-password"/></div>
+            <button class="btn btn-ghost btn-sm" onclick="Settings.toggleSecret('set-new-password')">Show</button>
+          </div>
+          <div class="ferr" id="err-new-password"></div>
+          <div class="fhint">Min 8 characters. Applies immediately — your session stays logged in.</div>
+        </div>
+        <div class="set-actions"><button class="btn btn-primary btn-sm" id="btn-change-password" onclick="Settings.changePassword()">Change password</button></div>
+      </div>
+    </div>
+
+    <div class="set-section" style="margin-top:34px">
+      <div class="sh"><div class="sl">Danger zone</div></div>
+      <div class="danger-zone">
+        <div class="tr" style="border-bottom:none">
+          <div><div class="trn">Restart service</div><div class="trd">Stops the process; Docker's restart policy brings it back within a few seconds. Needed to apply most saved settings.</div></div>
+          <button class="btn btn-danger btn-sm" onclick="Settings.confirmRestart()">Restart</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /main -->
+
+<script src="js/api.js"></script>
+<script src="js/theme.js"></script>
+<script src="js/toast.js"></script>
+<script src="js/modal.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/nav.js"></script>
+<script src="js/overview.js"></script>
+<script src="js/profiles.js"></script>
+<script src="js/scoring.js"></script>
+<script src="js/filters.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
