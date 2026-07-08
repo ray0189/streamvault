@@ -11,12 +11,26 @@ const router = express.Router();
 const envFile = require('../config/env-file');
 const cache = require('../cache/store');
 const env = require('../config/env');
+const { verifySession, tokenFromRequest } = require('../auth/session');
 
 const { ADMIN_PASSWORD } = env;
 
 function adminAuth(req, res, next) {
+  // Dashboard/browser path: accept the signed session cookie or Bearer token
+  // created by /api/auth/login.
+  try {
+    const session = verifySession(tokenFromRequest(req));
+    if (session) {
+      req.session = session;
+      return next();
+    }
+  } catch (_) {
+    // Fall through to legacy raw-token check below.
+  }
+
+  // CLI/backwards-compatible path: raw ADMIN_PASSWORD via x-admin-token or
+  // ?token=... still works for scripts/curl.
   const token = req.headers['x-admin-token'] || req.query.token;
-  // process.env first so a password change applies without a restart
   const current = process.env.ADMIN_PASSWORD || ADMIN_PASSWORD;
   if (token !== current) return res.status(401).json({ error: 'Unauthorised' });
   next();
